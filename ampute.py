@@ -16,7 +16,8 @@ def random_cells(X, n_out):
     return rows, cols
 
 
-def ampute_mcar(X, prop=.2):
+def ampute_mcar(X, prop=.2, random_state=42):
+    np.random.seed(random_state)
     n_missing = int(X.size * prop)
     r_nan, c_nan = random_cells(X, n_missing)
     res = X.astype(float)
@@ -24,7 +25,7 @@ def ampute_mcar(X, prop=.2):
     return res, r_nan, c_nan
 
 
-def ampute_mar(X_complete, prop=.2, W=None):
+def ampute_mar(X_complete, prop=.2, W=None, random_state=42):
     """ Observed values will censor the missing ones
 
     The proba of being missing: M_proba = X_obs.dot(W)
@@ -37,6 +38,7 @@ def ampute_mar(X_complete, prop=.2, W=None):
     So here W[0,-1] = 1
     [source](https://rmisstastic.netlify.com/how-to/python/generate_html/how%20to%20generate%20missing%20values)
     """
+    np.random.seed(random_state)
     X_obs = X_complete.copy().astype(float)
     M_proba = np.zeros(X_obs.shape)
 
