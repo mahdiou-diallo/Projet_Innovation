@@ -1,0 +1,18 @@
+L --> n x 2
+Z --> n x k
+W --> m x l
+C --> 2 x m
+
+L * C --> n x m (opération indicative.. reconstruction de la matrice X)
+
+L * Z * W * C (problème de dimensions à régler)
+
+Z' * L * C * W' --> k x l
+
+pourcentages de valeurs manquantes:
+    0.1, 0.2, 0.5, 0.7
+    MAR, MCAR
+    seed = 42
+    mesures de qualité d'imputation
+    NMI des coclusterings des résultats
+    
