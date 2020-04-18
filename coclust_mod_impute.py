@@ -189,7 +189,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
         self.modularity = -np.inf
         self.modularities = []
 
-    def fit(self, X, impute_fn, initial_vals=None, y=None):
+    def fit(self, X, impute_fn, initial_vals='zero', y=None):
         """Perform co-clustering by direct maximization of graph modularity.
 
         Parameters
@@ -200,17 +200,17 @@ class CoclustModImpute(BaseDiagonalCoclust):
 
         random_state = check_random_state(self.random_state)
 
-        X = X.astype(float)
+        X_ = X.astype(float)
 
-        X_ = X.copy()
         r_nan, c_nan = np.where(np.isnan(X_))
 
-        if initial_vals is not None:
+        if isinstance(initial_vals, np.ndarray):
             X_[r_nan, c_nan] = initial_vals
-        else:
+        elif initial_vals == 'zero':
+            X_[r_nan, c_nan] = 0.
+        elif initial_vals == 'rand':
             np.random.seed(self.random_state)
-#             np.random.rand(r_nan.shape[0]) *
-            X_[r_nan, c_nan] = 0
+            X_[r_nan, c_nan] = np.random.rand(r_nan.shape[0]) * np.nanmax(X_)
 
         check_array(X_, accept_sparse=True, dtype="numeric", order=None,
                     copy=False, force_all_finite=True, ensure_2d=True,

@@ -25,19 +25,7 @@ def ampute_mcar(X, prop=.2, random_state=42):
     return res, r_nan, c_nan
 
 
-def ampute_mar(X_complete, prop=.2, W=None, random_state=42):
-    """ Observed values will censor the missing ones
-
-    The proba of being missing: M_proba = X_obs.dot(W)
-    So for each sample, some observed feature (P=1) will influence 
-    the missingness of some others features (P=0) w.r.t to the weight 
-    matrix W (shape n_features x n_features).
-
-    e.g. during a questionnary, those who said being busy (X_obs[:,0] = 1) 
-    usualy miss to fill the last question (X_obs[:,-1] = np.nan)
-    So here W[0,-1] = 1
-    [source](https://rmisstastic.netlify.com/how-to/python/generate_html/how%20to%20generate%20missing%20values)
-    """
+def compute_mar_probas(X_complete, W=None, random_state=42):
     np.random.seed(random_state)
     X_obs = X_complete.copy().astype(float)
     M_proba = np.zeros(X_obs.shape)
@@ -47,7 +35,7 @@ def ampute_mar(X_complete, prop=.2, W=None, random_state=42):
         W = np.random.randn(X_complete.shape[1], X_complete.shape[1])
 
     # Severals iteration to have room for high missing_rate
-    for i in range(X_obs.shape[1]*2):
+    for i in range(min(20, X_obs.shape[1])):
         # Sample a pattern matrix P
         # P[i,j] = 1 will correspond to an observed value
         # P[i,j] = 0 will correspond to a potential missing value
@@ -64,6 +52,28 @@ def ampute_mar(X_complete, prop=.2, W=None, random_state=42):
         M_proba_ = np.multiply(M_proba_, 1-P)  # M_proba[P] = 0
 
         M_proba += M_proba_
+
+    return M_proba, X_obs
+
+
+def ampute_mar(X_complete, prop=.2, M_proba=None, W=None, random_state=42):
+    """ Observed values will censor the missing ones
+
+    The proba of being missing: M_proba = X_obs.dot(W)
+    So for each sample, some observed feature (P=1) will influence 
+    the missingness of some others features (P=0) w.r.t to the weight 
+    matrix W (shape n_features x n_features).
+
+    e.g. during a questionnary, those who said being busy (X_obs[:,0] = 1) 
+    usualy miss to fill the last question (X_obs[:,-1] = np.nan)
+    So here W[0,-1] = 1
+    [source](https://rmisstastic.netlify.com/how-to/python/generate_html/how%20to%20generate%20missing%20values)
+    """
+    if M_proba is None:
+        M_proba, X_obs = compute_mar_probas(
+            X_complete, W=W, random_state=random_state)
+    else:
+        X_obs = X_complete.astype(float).copy()
 
     thresold = np.percentile(M_proba.ravel(), 100 * (1 - prop))
     M = M_proba > thresold
