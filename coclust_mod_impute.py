@@ -61,7 +61,7 @@ def shrink_ca(X, ncp=2):
     S = (P - Rr @ Rc) / Rr**.5 / Rc**.5
 
     svals = svdvals(S)
-    u, s, v = sps.linalg.svds(S, k=ncp)
+    u, s, v = sps.linalg.svds(S, k=ncp, maxiter=500, tol=1E-9)
 
     zero_vals = np.isclose(0, s)  # find which singular values are null
     den = ((n-1)*(p-1) - (n-1)*ncp - (p-1)*ncp + ncp**2)
