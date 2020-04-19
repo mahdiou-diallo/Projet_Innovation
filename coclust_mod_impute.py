@@ -57,7 +57,7 @@ def _compute_modularity_matrix(X):
     return B, N
 
 
-def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_iter, tol, y=None):
+def _fit_single(X, n_clusters, impute_fn, impute_params, r_na, c_na, random_state, init, max_iter, tol, y=None):
     """Perform one run of co-clustering by direct maximization of graph
     modularity.
 
@@ -95,7 +95,7 @@ def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_it
         Z = (z == z_labels)*1
 
         # Update missing values in X using BW
-        X = impute_fn(X, Z, W, z, w, r_na, c_na)
+        X = impute_fn(X, Z, W, z, w, r_na, c_na, **impute_params)
         B, N = _compute_modularity_matrix(X)
 
         # Reassign columns
@@ -107,7 +107,7 @@ def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_it
         #     W[idx, k] = 1
 
         # Update missing values in X using BtZ
-        X = impute_fn(X, Z, W, z, w, r_na, c_na)
+        X = impute_fn(X, Z, W, z, w, r_na, c_na, **impute_params)
         B, N = _compute_modularity_matrix(X)
 
         k_times_k = (Z.T).dot(BW)
@@ -189,7 +189,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
         self.modularity = -np.inf
         self.modularities = []
 
-    def fit(self, X, impute_fn, initial_vals='zero', y=None):
+    def fit(self, X, impute_fn, impute_params={}, initial_vals='zero', y=None):
         """Perform co-clustering by direct maximization of graph modularity.
 
         Parameters
@@ -211,6 +211,8 @@ class CoclustModImpute(BaseDiagonalCoclust):
         elif initial_vals == 'rand':
             np.random.seed(self.random_state)
             X_[r_nan, c_nan] = np.random.rand(r_nan.shape[0]) * np.nanmax(X_)
+        else:
+            X_[r_nan, c_nan] = 0.
 
         check_array(X_, accept_sparse=True, dtype="numeric", order=None,
                     copy=False, force_all_finite=True, ensure_2d=True,
@@ -228,7 +230,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
         if effective_n_jobs(self.n_jobs) == 1 or True:
             for seed in seeds:
                 new_row_labels,  new_column_labels, new_modularity, new_modularities, new_nb_iterations, new_X_ = _fit_single(
-                    X_, self.n_clusters, impute_fn, r_nan, c_nan, seed, self.init, self.max_iter, self.tol, y)
+                    X_, self.n_clusters, impute_fn, impute_params, r_nan, c_nan, seed, self.init, self.max_iter, self.tol, y)
                 if np.isnan(new_modularity):
                     raise ValueError(
                         "matrix may contain unexpected NaN values")
@@ -241,7 +243,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
                     X_ = new_X_
         else:
             results = Parallel(n_jobs=self.n_jobs, verbose=0)(
-                delayed(_fit_single)(X_, self.n_clusters, impute_fn, r_nan, c_nan,
+                delayed(_fit_single)(X_, self.n_clusters, impute_fn, impute_params, r_nan, c_nan,
                                      seed, self.init, self.max_iter, self.tol, y)
                 for seed in seeds)
             (list_of_row_labels,  list_of_column_labels, list_of_modularity,
