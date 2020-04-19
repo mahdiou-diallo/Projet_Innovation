@@ -1,3 +1,14 @@
+# -*- coding: utf-8 -*-
+#
+# Implementation of imputation algorithm based on coclustering by direct maximization
+# of graph modularity
+#
+# Adapted from https://github.com/franrole/cclust_package/blob/d9cb1d677cf59718704a9673f67ee11b16511b34/coclust/coclustering/coclust_mod.py
+# by François Role and Stanislas Morbieu
+#
+# Author: Mamadou Mahdiou Diallo
+
+
 import numpy as np
 from sklearn.utils import check_random_state, check_array
 from joblib import Parallel, delayed, effective_n_jobs
@@ -41,6 +52,18 @@ def get_block_counts(z, wT):
 
 
 def _impute_block_representative(X, Z, W, z, w, r_nan, c_nan):
+    """Does the imputation of the matrix by replacing missing
+    values by the average of the block
+    Parameters
+    ----------
+    X: np.ndarray, input dataset (without missing values)
+    Z: np.ndarray, class membership probability matrix (rows)
+    W: np.ndarray, class membership probability matrix (colums)
+    z: np.ndarray, row classes
+    w: np.ndarray, column classes
+    r_nan: np.ndarray, row indices of missing values
+    c_nan: np.ndarray, column indices of missing values
+    """
     s = summarize_blocks(X, Z, W)
     bc = get_block_counts(Z, W)
     bc[bc == 0] = 1  # avoid divide by 0
@@ -50,6 +73,8 @@ def _impute_block_representative(X, Z, W, z, w, r_nan, c_nan):
 
 
 def shrink_ca(X, ncp=2):
+    """computes the approximation of a given matrix X using `ncp` components
+    """
     n, p = X.shape
     N = X.sum()
     N = 1 if N == 0 else N
@@ -79,11 +104,25 @@ def shrink_ca(X, ncp=2):
 
 
 def _impute_block_ca(X, Z, W, z, w, r_nan, c_nan, ncp=2):
+    """Does the imputation of the matrix by replacing missing
+    values their CA approximation
+    Parameters
+    ----------
+    X: np.ndarray, input dataset (without missing values)
+    Z: np.ndarray, class membership probability matrix (rows)
+    W: np.ndarray, class membership probability matrix (colums)
+    z: np.ndarray, row classes
+    w: np.ndarray, column classes
+    r_nan: np.ndarray, row indices of missing values
+    c_nan: np.ndarray, column indices of missing values
+    ncp: int, the number of components in latent space
+    """
     z = z.ravel()
     w = w.ravel()
     zvals = np.unique(z)
     wvals = np.unique(w)
 
+    # for conversion from X matrix indices to block matrix indices
     X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
     X_2_B_c = np.ones(w.shape[0], dtype=int)*-1
 
@@ -92,6 +131,7 @@ def _impute_block_ca(X, Z, W, z, w, r_nan, c_nan, ncp=2):
             block_z = z == zval
             block_w = w == wval
 
+            # mask for values in the current block that are missing
             pois = (z[r_nan] == zval) & (w[c_nan] == wval)
 
             # X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
@@ -121,7 +161,6 @@ def _compute_modularity_matrix(X):
     N = float(X.sum())
     indep = row_sums @ col_sums / N
 
-    # B is a numpy matrix
     B = X - indep
     return B, N
 
@@ -134,6 +173,8 @@ def _fit_single(X, n_clusters, impute_fn, impute_params, r_na, c_na, random_stat
     ----------
     X : numpy array or scipy sparse matrix, shape=(n_samples, n_features)
         Matrix to be analyzed
+    impute_fn: callable, the function used for imputation
+    impute_params: dict, the additional parameters that `impute_fn` takes
     """
     if init is None:
         W = random_init(n_clusters, X.shape[1], random_state)
