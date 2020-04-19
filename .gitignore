@@ -1,6 +1,7 @@
 data/
 .DS_Store
-
+mar_missing_data/
+output/
 ###################### Python ###############################
 # Byte-compiled / optimized / DLL files
 __pycache__/

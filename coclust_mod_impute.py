@@ -93,7 +93,7 @@ def _fit_single(X, n_clusters, impute_fn, impute_params, r_na, c_na, random_stat
         BW = B.dot(W)
         z = np.argmax(BW, axis=1)[:, np.newaxis]
         Z = (z == z_labels)*1
-
+        
         # Update missing values in X using BW
         X = impute_fn(X, Z, W, z, w, r_na, c_na, **impute_params)
         B, N = _compute_modularity_matrix(X)
