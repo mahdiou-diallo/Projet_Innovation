@@ -1,9 +1,24 @@
+# -*- coding: utf-8 -*-
+#
+# Implementation of imputation algorithm based on coclustering by direct maximization
+# of graph modularity
+#
+# Adapted from https://github.com/franrole/cclust_package/blob/d9cb1d677cf59718704a9673f67ee11b16511b34/coclust/coclustering/coclust_mod.py
+# by François Role and Stanislas Morbieu
+#
+# Author: Mamadou Mahdiou Diallo
+
+
 import numpy as np
 from sklearn.utils import check_random_state, check_array
 from joblib import Parallel, delayed, effective_n_jobs
 
 from coclust.initialization import random_init
 from coclust.coclustering.base_diagonal_coclust import BaseDiagonalCoclust
+
+import scipy.sparse as sps
+from scipy.sparse.linalg import svds
+from scipy.linalg import svdvals
 
 
 def summarize_blocks(X, z, wT):
@@ -37,11 +52,105 @@ def get_block_counts(z, wT):
 
 
 def _impute_block_representative(X, Z, W, z, w, r_nan, c_nan):
+    """Does the imputation of the matrix by replacing missing
+    values by the average of the block
+    Parameters
+    ----------
+    X: np.ndarray, input dataset (without missing values)
+    Z: np.ndarray, class membership probability matrix (rows)
+    W: np.ndarray, class membership probability matrix (colums)
+    z: np.ndarray, row classes
+    w: np.ndarray, column classes
+    r_nan: np.ndarray, row indices of missing values
+    c_nan: np.ndarray, column indices of missing values
+    """
     s = summarize_blocks(X, Z, W)
     bc = get_block_counts(Z, W)
     bc[bc == 0] = 1  # avoid divide by 0
     block_rep_vals = s / bc
     X[r_nan, c_nan] = block_rep_vals[z[r_nan].ravel(), w[c_nan].ravel()]
+    return X
+
+
+def shrink_ca(X, ncp=2):
+    """computes the approximation of a given matrix X using `ncp` components
+    """
+    n, p = X.shape
+    N = X.sum()
+    N = 1 if N == 0 else N
+    P = X / N
+    Rc = P.sum(axis=0)[np.newaxis, :]
+    Rr = P.sum(axis=1)[:, np.newaxis]
+    Rc[Rc == 0] = 1
+    Rr[Rr == 0] = 1
+    S = (P - Rr @ Rc) / Rr**.5 / Rc**.5
+
+    svals = svdvals(S)
+    u, s, v = sps.linalg.svds(S, k=ncp, maxiter=500, tol=1E-9)
+
+    zero_vals = np.isclose(0, s)  # find which singular values are null
+    den = ((n-1)*(p-1) - (n-1)*ncp - (p-1)*ncp + ncp**2)
+    sigma2 = (svals[ncp:]**2).sum() / (1 if den == 0 else den)
+
+    lambda_shrunk = s.copy()
+    lambda_shrunk[~zero_vals] = (
+        s[~zero_vals]**2 - n * p / min(p, n-1) * sigma2) / s[~zero_vals]
+
+    recon = (u * lambda_shrunk) @ v
+    recon = N * (((recon * Rr**.5) * Rc**.5) + Rr @ Rc)
+    recon[recon < 0] = 0  # account for numerical errors and avoid negative values
+
+    return recon
+
+
+def _impute_block_ca(X, Z, W, z, w, r_nan, c_nan, ncp=2):
+    """Does the imputation of the matrix by replacing missing
+    values their CA approximation
+    Parameters
+    ----------
+    X: np.ndarray, input dataset (without missing values)
+    Z: np.ndarray, class membership probability matrix (rows)
+    W: np.ndarray, class membership probability matrix (colums)
+    z: np.ndarray, row classes
+    w: np.ndarray, column classes
+    r_nan: np.ndarray, row indices of missing values
+    c_nan: np.ndarray, column indices of missing values
+    ncp: int, the number of components in latent space
+    """
+    z = z.ravel()
+    w = w.ravel()
+    zvals = np.unique(z)
+    wvals = np.unique(w)
+
+    # for conversion from X matrix indices to block matrix indices
+    X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
+    X_2_B_c = np.ones(w.shape[0], dtype=int)*-1
+
+    for zval in zvals:
+        for wval in wvals:
+            block_z = z == zval
+            block_w = w == wval
+
+            # mask for values in the current block that are missing
+            pois = (z[r_nan] == zval) & (w[c_nan] == wval)
+
+            # X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
+            # X_2_B_c = np.ones(w.shape[0], dtype=int)*-1
+
+            if np.any(pois):
+                block = X[np.ix_(block_z, block_w)]
+                min_dim = min(block.shape)
+                if min_dim < 2:
+                    summary = block.sum() / block.size
+                    X[r_nan[pois], c_nan[pois]] = summary
+                else:
+                    recon = shrink_ca(block, min(ncp, min_dim-1))
+
+                    X_2_B_r[block_z] = np.arange(block.shape[0])
+                    X_2_B_c[block_w] = np.arange(block.shape[1])
+
+                    X[r_nan[pois], c_nan[pois]
+                      ] = recon[X_2_B_r[r_nan[pois]], X_2_B_c[c_nan[pois]]]
     return X
 
 
@@ -52,12 +161,11 @@ def _compute_modularity_matrix(X):
     N = float(X.sum())
     indep = row_sums @ col_sums / N
 
-    # B is a numpy matrix
     B = X - indep
     return B, N
 
 
-def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_iter, tol, y=None):
+def _fit_single(X, n_clusters, impute_fn, impute_params, r_na, c_na, random_state, init, max_iter, tol, y=None):
     """Perform one run of co-clustering by direct maximization of graph
     modularity.
 
@@ -65,6 +173,8 @@ def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_it
     ----------
     X : numpy array or scipy sparse matrix, shape=(n_samples, n_features)
         Matrix to be analyzed
+    impute_fn: callable, the function used for imputation
+    impute_params: dict, the additional parameters that `impute_fn` takes
     """
     if init is None:
         W = random_init(n_clusters, X.shape[1], random_state)
@@ -93,21 +203,18 @@ def _fit_single(X, n_clusters, impute_fn, r_na, c_na, random_state, init, max_it
         BW = B.dot(W)
         z = np.argmax(BW, axis=1)[:, np.newaxis]
         Z = (z == z_labels)*1
-        
+
         # Update missing values in X using BW
-        X = impute_fn(X, Z, W, z, w, r_na, c_na)
+        X = impute_fn(X, Z, W, z, w, r_na, c_na, **impute_params)
         B, N = _compute_modularity_matrix(X)
 
         # Reassign columns
         BtZ = (B.T).dot(Z)
         w = np.argmax(BtZ, axis=1)[:, np.newaxis]
         W = (w == w_labels)*1
-        # for idx, k in enumerate(np.argmax(BtZ, axis=1)):
-        #     W[idx, :] = 0
-        #     W[idx, k] = 1
 
         # Update missing values in X using BtZ
-        X = impute_fn(X, Z, W, z, w, r_na, c_na)
+        X = impute_fn(X, Z, W, z, w, r_na, c_na, **impute_params)
         B, N = _compute_modularity_matrix(X)
 
         k_times_k = (Z.T).dot(BW)
@@ -189,7 +296,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
         self.modularity = -np.inf
         self.modularities = []
 
-    def fit(self, X, impute_fn, initial_vals='zero', y=None):
+    def fit(self, X, impute_fn, impute_params={}, initial_vals='zero', y=None):
         """Perform co-clustering by direct maximization of graph modularity.
 
         Parameters
@@ -211,6 +318,8 @@ class CoclustModImpute(BaseDiagonalCoclust):
         elif initial_vals == 'rand':
             np.random.seed(self.random_state)
             X_[r_nan, c_nan] = np.random.rand(r_nan.shape[0]) * np.nanmax(X_)
+        else:
+            X_[r_nan, c_nan] = 0.
 
         check_array(X_, accept_sparse=True, dtype="numeric", order=None,
                     copy=False, force_all_finite=True, ensure_2d=True,
@@ -228,7 +337,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
         if effective_n_jobs(self.n_jobs) == 1 or True:
             for seed in seeds:
                 new_row_labels,  new_column_labels, new_modularity, new_modularities, new_nb_iterations, new_X_ = _fit_single(
-                    X_, self.n_clusters, impute_fn, r_nan, c_nan, seed, self.init, self.max_iter, self.tol, y)
+                    X_, self.n_clusters, impute_fn, impute_params, r_nan, c_nan, seed, self.init, self.max_iter, self.tol, y)
                 if np.isnan(new_modularity):
                     raise ValueError(
                         "matrix may contain unexpected NaN values")
@@ -241,7 +350,7 @@ class CoclustModImpute(BaseDiagonalCoclust):
                     X_ = new_X_
         else:
             results = Parallel(n_jobs=self.n_jobs, verbose=0)(
-                delayed(_fit_single)(X_, self.n_clusters, impute_fn, r_nan, c_nan,
+                delayed(_fit_single)(X_, self.n_clusters, impute_fn, impute_params, r_nan, c_nan,
                                      seed, self.init, self.max_iter, self.tol, y)
                 for seed in seeds)
             (list_of_row_labels,  list_of_column_labels, list_of_modularity,
