@@ -7,6 +7,89 @@ from sklearn.utils import check_random_state, check_array
 from utils import (summarize_blocks, get_block_counts, _impute_block_representative)
 from scipy.sparse.sputils import isdense
 from coclust.coclustering.base_non_diagonal_coclust import BaseNonDiagonalCoclust
+from scipy.linalg import svdvals
+
+def shrink_ca(X, ncp=2):
+    """computes the approximation of a given matrix X using `ncp` components
+    """
+    n, p = X.shape
+    N = X.sum()
+    N = 1 if N == 0 else N
+    P = X / N
+    Rc = P.sum(axis=0)[np.newaxis, :]
+    Rr = P.sum(axis=1)[:, np.newaxis]
+    Rc[Rc == 0] = 1
+    Rr[Rr == 0] = 1
+    S = (P - Rr @ Rc) / Rr**.5 / Rc**.5
+
+    svals = svdvals(S)
+    u, s, v = sp.linalg.svds(S, k=ncp, maxiter=1000, tol=1E-9)
+
+    zero_vals = np.isclose(0, s)  # find which singular values are null
+    den = ((n-1)*(p-1) - (n-1)*ncp - (p-1)*ncp + ncp**2)
+    sigma2 = (svals[ncp:]**2).sum() / (1 if den == 0 else den)
+
+    lambda_shrunk = s.copy()
+    lambda_shrunk[~zero_vals] = (
+        s[~zero_vals]**2 - n * p / min(p, n-1) * sigma2) / s[~zero_vals]
+
+    recon = (u * lambda_shrunk) @ v
+    recon = N * (((recon * Rr**.5) * Rc**.5) + Rr @ Rc)
+    recon[recon < 0] = 0  # account for numerical errors and avoid negative values
+
+    return recon
+
+
+def _impute_block_ca(X, Z, W, z, w, r_nan, c_nan, ncp=2):
+    """Does the imputation of the matrix by replacing missing
+    values their CA approximation
+    Parameters
+    ----------
+    X: np.ndarray, input dataset (without missing values)
+    Z: np.ndarray, class membership probability matrix (rows)
+    W: np.ndarray, class membership probability matrix (colums)
+    z: np.ndarray, row classes
+    w: np.ndarray, column classes
+    r_nan: np.ndarray, row indices of missing values
+    c_nan: np.ndarray, column indices of missing values
+    ncp: int, the number of components in latent space
+    """
+    z = z.ravel()
+    w = w.ravel()
+    zvals = np.unique(z)
+    wvals = np.unique(w)
+
+    # for conversion from X matrix indices to block matrix indices
+    X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
+    X_2_B_c = np.ones(w.shape[0], dtype=int)*-1
+
+    for zval in zvals:
+        for wval in wvals:
+            block_z = z == zval
+            block_w = w == wval
+
+            # mask for values in the current block that are missing
+            pois = (z[r_nan] == zval) & (w[c_nan] == wval)
+
+            # X_2_B_r = np.ones(z.shape[0], dtype=int)*-1
+            # X_2_B_c = np.ones(w.shape[0], dtype=int)*-1
+
+            if np.any(pois):
+                block = X[np.ix_(block_z, block_w)]
+                min_dim = min(block.shape)
+                if min_dim < 2:
+                    summary = block.sum() / block.size
+                    X[r_nan[pois], c_nan[pois]] = summary
+                else:
+                    recon = shrink_ca(block, min(ncp, min_dim-1))
+
+                    X_2_B_r[block_z] = np.arange(block.shape[0])
+                    X_2_B_c[block_w] = np.arange(block.shape[1])
+
+                    X[r_nan[pois], c_nan[pois]
+                      ] = recon[X_2_B_r[r_nan[pois]], X_2_B_c[c_nan[pois]]]
+    return X
+
 
 
 class CoclustInfoImpute(BaseNonDiagonalCoclust):
@@ -196,7 +279,7 @@ class CoclustInfoImpute(BaseNonDiagonalCoclust):
 
             # impute missing value
             z_ = np.argmax(Z, axis=1)[:, np.newaxis]
-            X = impute_func(X, Z, W.toarray(), z_, w_, na_rows, na_cols)
+            X = sp.csr_matrix(impute_func(X.toarray(), Z, W.toarray(), z_, w_, na_rows, na_cols))
             Z = sp.csr_matrix(Z)
             
             # Update delta
@@ -229,7 +312,7 @@ class CoclustInfoImpute(BaseNonDiagonalCoclust):
             W[np.arange(len(W1)), W1.argmax(1)] = 1
             # impute missing value
             w_ = np.argmax(W, axis=1)[:, np.newaxis]
-            X = impute_func(X, Z.toarray(), W, z_, w_, na_rows, na_cols)
+            X = sp.csr_matrix(impute_func(X.toarray(), Z.toarray(), W, z_, w_, na_rows, na_cols))
             W = sp.csr_matrix(W)
 
             # Update delta
